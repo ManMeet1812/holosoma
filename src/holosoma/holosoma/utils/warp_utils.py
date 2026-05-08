@@ -6,15 +6,17 @@ import numpy as np
 import torch
 import warp as wp
 
+wp_array = getattr(getattr(wp, "types", None), "array", wp.array)
+
 wp.init()
 
 
 @wp.kernel
 def raycast_kernel(
   mesh: wp.uint64,
-  ray_starts_world: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
-  ray_directions_world: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
-  ray_hits_world: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
+  ray_starts_world: wp_array(dtype=wp.vec3),  # type: ignore[valid-type]
+  ray_directions_world: wp_array(dtype=wp.vec3),  # type: ignore[valid-type]
+  ray_hits_world: wp_array(dtype=wp.vec3),  # type: ignore[valid-type]
 ):
   tid = wp.tid()
 
@@ -55,7 +57,7 @@ def ray_cast(ray_starts_world: torch.Tensor, ray_directions_world: torch.Tensor,
   ray_starts_world = ray_starts_world.view(-1, 3)
   ray_directions_world = ray_directions_world.view(-1, 3)
   num_rays = len(ray_starts_world)
-  ray_starts_world_wp = wp.types.array(
+  ray_starts_world_wp = wp_array(
     ptr=ray_starts_world.data_ptr(),
     dtype=wp.vec3,
     shape=(num_rays,),
@@ -63,7 +65,7 @@ def ray_cast(ray_starts_world: torch.Tensor, ray_directions_world: torch.Tensor,
     # owner=False,
     device=wp_mesh.device,
   )
-  ray_directions_world_wp = wp.types.array(
+  ray_directions_world_wp = wp_array(
     ptr=ray_directions_world.data_ptr(),
     dtype=wp.vec3,
     shape=(num_rays,),
@@ -73,7 +75,7 @@ def ray_cast(ray_starts_world: torch.Tensor, ray_directions_world: torch.Tensor,
   )
   ray_hits_world = torch.zeros((num_rays, 3), device=ray_starts_world.device)
   ray_hits_world[:] = float('inf')
-  ray_hits_world_wp = wp.types.array(
+  ray_hits_world_wp = wp_array(
     ptr=ray_hits_world.data_ptr(),
     dtype=wp.vec3,
     shape=(num_rays,),
@@ -99,8 +101,8 @@ def ray_cast(ray_starts_world: torch.Tensor, ray_directions_world: torch.Tensor,
 @wp.kernel
 def nearest_point_kernel(
   mesh: wp.uint64,
-  points: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
-  mesh_points: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
+  points: wp_array(dtype=wp.vec3),  # type: ignore[valid-type]
+  mesh_points: wp_array(dtype=wp.vec3),  # type: ignore[valid-type]
 ):
   tid = wp.tid()
 
@@ -130,7 +132,7 @@ def nearest_point(points: torch.Tensor, wp_mesh: wp.Mesh) -> torch.Tensor:
   shape = points.shape
   points = points.view(-1, 3)
   num_points = len(points)
-  points_wp = wp.types.array(
+  points_wp = wp_array(
     ptr=points.data_ptr(),
     dtype=wp.vec3,
     shape=(num_points,),
@@ -140,7 +142,7 @@ def nearest_point(points: torch.Tensor, wp_mesh: wp.Mesh) -> torch.Tensor:
   )
   mesh_points = torch.zeros((num_points, 3), device=points.device)
   mesh_points[:] = float('inf')
-  mesh_points_wp = wp.types.array(
+  mesh_points_wp = wp_array(
     ptr=mesh_points.data_ptr(),
     dtype=wp.vec3,
     shape=(num_points,),
@@ -160,6 +162,6 @@ def nearest_point(points: torch.Tensor, wp_mesh: wp.Mesh) -> torch.Tensor:
 
 def convert_to_wp_mesh(vertices: np.ndarray, triangles: np.ndarray, device: str) -> wp.Mesh:
   return wp.Mesh(
-    points=wp.array(vertices.astype(np.float32), dtype=wp.vec3, device=device),
-    indices=wp.array(triangles.astype(np.int32).flatten(), dtype=int, device=device),
+    points=wp_array(vertices.astype(np.float32), dtype=wp.vec3, device=device),
+    indices=wp_array(triangles.astype(np.int32).flatten(), dtype=int, device=device),
   )

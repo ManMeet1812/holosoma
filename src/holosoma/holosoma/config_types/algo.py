@@ -311,6 +311,125 @@ class FastSACConfig:
     eval_callbacks: Any = None
     """Evaluation callbacks configuration."""
 
+@dataclass(frozen=True)
+class FastTD3Config:
+    num_learning_iterations: int = 25000
+    """total number of learning iterations"""
+
+    critic_learning_rate: float = 3e-4
+    """the learning rate of the critic"""
+
+    actor_learning_rate: float = 3e-4
+    """the learning rate for the actor"""
+
+    buffer_size: int = 1024
+    """the replay memory buffer size per environment"""
+
+    num_steps: int = 1
+    """the number of steps to use for the multi-step return"""
+
+    gamma: float = 0.97
+    """the discount factor gamma"""
+
+    tau: float = 0.125
+    """target smoothing coefficient"""
+
+    batch_size: int = 8192
+    """the batch size sampled from replay memory"""
+
+    learning_starts: int = 10
+    """timestep to start learning"""
+
+    policy_frequency: int = 4
+    """the frequency of delayed actor updates"""
+
+    num_updates: int = 8
+    """the number of critic updates per environment step"""
+
+    policy_noise: float = 0.2
+    """target policy smoothing noise"""
+
+    noise_clip: float = 0.5
+    """clip range for target policy smoothing noise"""
+
+    use_cdq: bool = True
+    """whether to use clipped double Q target selection"""
+
+    num_atoms: int = 101
+    """the number of atoms for distributional critic"""
+
+    v_min: float = -20.0
+    """the minimum value of the support"""
+
+    v_max: float = 20.0
+    """the maximum value of the support"""
+
+    critic_hidden_dim: int = 768
+    """the hidden dimension of the critic network"""
+
+    actor_hidden_dim: int = 512
+    """the hidden dimension of the actor network"""
+
+    actor_init_scale: float = 0.01
+    """initialization scale for the actor output layer"""
+
+    std_min: float = 0.05
+    """minimum exploration noise scale"""
+
+    std_max: float = 0.8
+    """maximum exploration noise scale"""
+
+    use_symmetry: bool = False
+    """whether to use symmetry"""
+
+    use_tanh: bool = True
+    """whether to use tanh for the action"""
+
+    compile: bool = True
+    """whether to use torch.compile"""
+
+    obs_normalization: bool = True
+    """whether to enable observation normalization"""
+
+    reward_normalization: bool = False
+    """whether to enable reward normalization"""
+
+    use_layer_norm: bool = False
+    """kept for config compatibility; official copied FastTD3 MLP does not currently use it"""
+
+    max_grad_norm: float = 0.0
+    """the maximum gradient norm"""
+
+    amp: bool = True
+    """whether to use amp"""
+
+    amp_dtype: str = "bf16"
+    """the dtype of amp"""
+
+    weight_decay: float = 0.001
+    """the weight decay of the optimizer"""
+
+    save_interval: int = 1000
+    """the interval to save the model"""
+
+    logging_interval: int = 100
+    """the interval to log metrics"""
+
+    use_cnn_encoder: bool = False
+    """kept for config compatibility; FastTD3 integration currently uses MLP only"""
+
+    encoder_obs_key: str = "perception_obs"
+    """kept for compatibility"""
+
+    encoder_obs_shape: tuple[int, int, int] = (1, 13, 9)
+    """kept for compatibility"""
+
+    actor_obs_keys: List[str] = field(default_factory=lambda: ["actor_obs"])
+    critic_obs_keys: List[str] = field(default_factory=lambda: ["critic_obs"])
+
+    eval_callbacks: Any = None
+    """Evaluation callbacks configuration."""
+
 
 @dataclass(frozen=True)
 class PPOAlgoConfig:
@@ -339,7 +458,20 @@ class FastSACAlgoConfig:
     config: FastSACConfig
     """Algorithm-specific configuration."""
 
+@dataclass(frozen=True)
+class FastTD3AlgoConfig:
+    """Configuration for FastTD3 algorithm wrapper."""
 
-AlgoInitConfig = Union[PPOConfig, FastSACConfig]
+    _target_: str
+    """Target algorithm class."""
 
-AlgoConfig = Union[PPOAlgoConfig, FastSACAlgoConfig]
+    _recursive_: bool
+    """Whether to recursively instantiate."""
+
+    config: FastTD3Config
+    """Algorithm-specific configuration."""
+
+
+AlgoInitConfig = Union[PPOConfig, FastSACConfig, FastTD3Config]
+
+AlgoConfig = Union[PPOAlgoConfig, FastSACAlgoConfig, FastTD3AlgoConfig]
