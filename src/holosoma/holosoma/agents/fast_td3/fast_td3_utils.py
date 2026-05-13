@@ -40,8 +40,10 @@ class SimpleReplayBuffer(nn.Module):
         self.n_obs = n_obs
         self.n_act = n_act
         self.n_critic_obs = n_critic_obs
-        self.asymmetric_obs = asymmetric_obs
-        self.playground_mode = playground_mode and asymmetric_obs
+        # Automatically enable asymmetric observations when critic obs dim differs
+        # from actor obs dim.
+        self.asymmetric_obs = asymmetric_obs or (n_critic_obs != n_obs)
+        self.playground_mode = playground_mode and self.asymmetric_obs
         self.gamma = gamma
         self.n_steps = n_steps
         self.device = device
@@ -62,7 +64,7 @@ class SimpleReplayBuffer(nn.Module):
         self.next_observations = torch.zeros(
             (n_env, buffer_size, n_obs), device=device, dtype=torch.float
         )
-        if asymmetric_obs:
+        if self.asymmetric_obs:
             if self.playground_mode:
                 # Only store the privileged part of observations (n_critic_obs - n_obs)
                 self.privileged_obs_size = n_critic_obs - n_obs
@@ -375,28 +377,33 @@ class SimpleReplayBuffer(nn.Module):
                 self.n_env * batch_size, self.n_obs
             )
 
+        if not self.asymmetric_obs:
+            critic_observations = observations
+            next_critic_observations = next_observations
+        
         out = TensorDict(
             {
                 "observations": observations,
+                "critic_observations": critic_observations,
                 "actions": actions,
                 "next": {
                     "rewards": rewards,
                     "dones": dones,
                     "truncations": truncations,
                     "observations": next_observations,
+                    "critic_observations": next_critic_observations,
                     "effective_n_steps": effective_n_steps,
                 },
             },
-            batch_size=self.n_env * batch_size,
+            batch_size=[self.n_env * batch_size],
+            device=self.device,
         )
-        if self.asymmetric_obs:
-            out["critic_observations"] = critic_observations
-            out["next"]["critic_observations"] = next_critic_observations
-
+        
         if self.n_steps > 1 and self.ptr >= self.buffer_size:
-            # Roll back the truncation flags introduced for safe sampling
             self.truncations[:, current_pos - 1] = curr_truncations
+        
         return out
+
 
 
 class EmpiricalNormalization(nn.Module):

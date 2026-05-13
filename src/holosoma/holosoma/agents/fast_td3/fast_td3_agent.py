@@ -232,7 +232,7 @@ class FastTD3Agent(BaseAlgo):
                 "size": obs_size,
             }
             critic_obs_dim += obs_size
-
+        self.critic_obs_dim = critic_obs_dim
         self.scaler = GradScaler(enabled=args.amp)
 
         self.obs_normalization = args.obs_normalization
@@ -399,8 +399,9 @@ class FastTD3Agent(BaseAlgo):
             bootstrap = (truncations | ~dones).float()
             discount = args.gamma ** data["next"]["effective_n_steps"]
 
-            policy_noise = getattr(args, "policy_noise", 0.2)
-            noise_clip = getattr(args, "noise_clip", 0.5)
+            
+            policy_noise = args.policy_noise
+            noise_clip = args.noise_clip
 
             clipped_noise = torch.randn_like(actions)
             clipped_noise = clipped_noise.mul(policy_noise).clamp(-noise_clip, noise_clip)
@@ -533,64 +534,112 @@ class FastTD3Agent(BaseAlgo):
         # Sample a large batch (batch_size * num_updates)
         large_batch_size = batch_size * num_updates
         large_data = self.rb.sample(large_batch_size)
+    
+        # ------------------------------------------------------------------
+        # SAFETY FIX:
+        # Some replay-buffer samples only return:
+        #   ["observations", "actions", "next"]
+        # but FastTD3 critic update expects:
+        #   ["critic_observations"]
+        #   ["next"]["critic_observations"]
+        #
+        # If critic observations are missing, fall back to actor observations.
+        # This avoids KeyError, but if actor_obs_dim != critic_obs_dim,
+        # it means the replay buffer itself still needs to be fixed.
+        # ------------------------------------------------------------------
+        if "critic_observations" not in large_data.keys():
+            large_data["critic_observations"] = large_data["observations"]
+    
+        if "critic_observations" not in large_data["next"].keys():
+            large_data["next"]["critic_observations"] = large_data["next"]["observations"]
+    
+        # Shape guard: because your actor_obs_dim=100 and critic_obs_dim=103.
+        # If fallback gives 100, this will clearly show that SimpleReplayBuffer
+        # is dropping critic_observations.
+        if large_data["critic_observations"].shape[-1] != self.critic_obs_dim:
+            raise RuntimeError(
+                f"Replay buffer returned critic_observations with wrong dim: "
+                f"got {large_data['critic_observations'].shape[-1]}, "
+                f"expected {self.critic_obs_dim}. "
+                "This means SimpleReplayBuffer is not storing critic_observations correctly."
+            )
+    
+        if large_data["next"]["critic_observations"].shape[-1] != self.critic_obs_dim:
+            raise RuntimeError(
+                f"Replay buffer returned next critic_observations with wrong dim: "
+                f"got {large_data['next']['critic_observations'].shape[-1]}, "
+                f"expected {self.critic_obs_dim}. "
+                "This means SimpleReplayBuffer is not storing next critic_observations correctly."
+            )
+    
         samples_per_update = batch_size * self.env.num_envs
-
+    
         if self.config.use_symmetry:
             samples_per_update *= 2
-
+    
             augmented_large_data: Dict[str, torch.Tensor | Dict[str, torch.Tensor]] = {"next": {}}
-
+    
             augmented_large_data["observations"] = self.symmetry_utils.augment_observations(
                 obs=large_data["observations"],
                 env=self.env,
                 obs_list=self.config.actor_obs_keys,
             )
-            augmented_large_data["actions"] = self.symmetry_utils.augment_actions(actions=large_data["actions"])
+    
+            augmented_large_data["actions"] = self.symmetry_utils.augment_actions(
+                actions=large_data["actions"]
+            )
+    
             assert isinstance(augmented_large_data["next"], dict)
+    
             augmented_large_data["next"]["observations"] = self.symmetry_utils.augment_observations(
                 obs=large_data["next"]["observations"],
                 env=self.env,
                 obs_list=self.config.actor_obs_keys,
             )
+    
             augmented_large_data["critic_observations"] = self.symmetry_utils.augment_observations(
                 obs=large_data["critic_observations"],
                 env=self.env,
                 obs_list=self.config.critic_obs_keys,
             )
+    
             augmented_large_data["next"]["critic_observations"] = self.symmetry_utils.augment_observations(
                 obs=large_data["next"]["critic_observations"],
                 env=self.env,
                 obs_list=self.config.critic_obs_keys,
             )
-
+    
             # Calculate augmentation factor and repeat non-augmented data
             observations_tensor = augmented_large_data["observations"]
             assert isinstance(observations_tensor, torch.Tensor), (
                 "observations should be a Tensor after data augmentation"
             )
+    
             num_aug = int(observations_tensor.shape[0] / large_data["next"]["rewards"].shape[0])
-            augmented_large_data["next"]["rewards"] = large_data["next"]["rewards"].repeat(num_aug)  # type: ignore[index]
-            augmented_large_data["next"]["dones"] = large_data["next"]["dones"].repeat(num_aug)  # type: ignore[index]
-            augmented_large_data["next"]["truncations"] = large_data["next"]["truncations"].repeat(num_aug)  # type: ignore[index]
-            augmented_large_data["next"]["effective_n_steps"] = large_data["next"]["effective_n_steps"].repeat(num_aug)  # type: ignore[index]
-
+    
+            augmented_large_data["next"]["rewards"] = large_data["next"]["rewards"].repeat(num_aug)
+            augmented_large_data["next"]["dones"] = large_data["next"]["dones"].repeat(num_aug)
+            augmented_large_data["next"]["truncations"] = large_data["next"]["truncations"].repeat(num_aug)
+            augmented_large_data["next"]["effective_n_steps"] = large_data["next"]["effective_n_steps"].repeat(num_aug)
+    
             # Override large_data
             large_data = augmented_large_data
-
+    
         # Normalize all data once
         large_data["observations"] = normalize_obs(large_data["observations"])
         large_data["next"]["observations"] = normalize_obs(large_data["next"]["observations"])
         large_data["critic_observations"] = normalize_critic_obs(large_data["critic_observations"])
-        large_data["next"]["critic_observations"] = normalize_critic_obs(large_data["next"]["critic_observations"])
-
+        large_data["next"]["critic_observations"] = normalize_critic_obs(
+            large_data["next"]["critic_observations"]
+        )
+    
         # Split into smaller batches
         prepared_batches = []
-
+    
         for i in range(num_updates):
             start_idx = i * samples_per_update
             end_idx = (i + 1) * samples_per_update
-
-            # Create a slice of the large batch
+    
             batch_data = TensorDict(
                 {
                     "observations": large_data["observations"][start_idx:end_idx],
@@ -600,16 +649,16 @@ class FastTD3Agent(BaseAlgo):
                         "dones": large_data["next"]["dones"][start_idx:end_idx],
                         "truncations": large_data["next"]["truncations"][start_idx:end_idx],
                         "observations": large_data["next"]["observations"][start_idx:end_idx],
+                        "critic_observations": large_data["next"]["critic_observations"][start_idx:end_idx],
                         "effective_n_steps": large_data["next"]["effective_n_steps"][start_idx:end_idx],
                     },
                     "critic_observations": large_data["critic_observations"][start_idx:end_idx],
                 },
-                batch_size=samples_per_update,
+                batch_size=[samples_per_update],
             )
-            batch_data["next"]["critic_observations"] = large_data["next"]["critic_observations"][start_idx:end_idx]
-
+    
             prepared_batches.append(batch_data)
-
+    
         return prepared_batches
 
     def load(self, ckpt_path: str | None) -> None:
